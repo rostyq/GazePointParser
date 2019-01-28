@@ -79,7 +79,7 @@ class GazePointProject:
         """
         sessions = self.sessions if session_indices is None else [self.sessions[i] for i in session_indices]
         for session in sessions:
-            session.export(self.result_path, **kwargs)
+            session.export(**kwargs)
 
 
 def test():

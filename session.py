@@ -293,7 +293,7 @@ class ProjectSession:
             Additional keyword arguments, that will be passed to
             pandas.DataFrame.to_csv() method.
         """
-        self.records.to_csv(str(filename), **kwargs)
+        self.get_dataframe().to_csv(str(filename), **kwargs)
 
     def export_fixations(self, filename, **kwargs):
         """
@@ -307,8 +307,8 @@ class ProjectSession:
             Additional keyword arguments, that will be passed to
             pandas.DataFrame.to_csv() method.
         """
-        # TODO implement fixation aggregation and exporting
-        raise NotImplementedError
+        records = self.get_dataframe()
+        records.groupby(by='FPOGID').tail(1).to_csv(str(filename), **kwargs)
 
     def read_annotation_file(self, filename):
         """
@@ -339,7 +339,7 @@ class ProjectSession:
             timestamp = row['timestamp']
             flag = row['flag']
 
-        print(annot_df)
+        print()
 
     def export(self, screen=True, gaze=True, fixation=False,
                last_fixation_count=5):
@@ -391,7 +391,7 @@ def test():
                           prj_path=Path(test_sess_path),
                           records_range=(records,))
     # sess.render_screen(test_export_path)
-    sess.split_records()
+    sess.export_fixations('fix.csv')
 
 
 if __name__ == '__main__':

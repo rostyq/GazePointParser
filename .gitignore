@@ -1,0 +1,8 @@
+__pycache__/
+env/
+**.pyc
+cscope.files
+cscope.out
+*.swp
+*.egg-info
+

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from session import ProjectSession
+from gpparser.session import ProjectSession
 
 import yaml
 
@@ -77,14 +77,24 @@ class GazePointProject:
             fixation : bool -- export fixation data
             last_fixation_count : int -- how many fixations to render on each frame.
         """
-        sessions = self.sessions if session_indices is None else [self.sessions[i] for i in session_indices]
+        sessions = self.sessions \
+            if session_indices is None \
+            else [self.sessions[i] for i in session_indices]
+
         for session in sessions:
             session.export(**kwargs)
+
+    def split_sessions(self, session_indices=None, **kwargs):
+        sessions = self.sessions \
+            if session_indices is None \
+            else [self.sessions[i] for i in session_indices]
+
+        for session in sessions:
+            session.split()
 
 
 def test():
     import sys
-    from pprint import pprint
 
     # define test paths with GP Analysis data
     test_prj_path = Path(sys.argv[1])
@@ -95,4 +105,3 @@ def test():
 
 if __name__ == '__main__':
     test()
-

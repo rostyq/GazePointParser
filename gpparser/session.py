@@ -11,7 +11,7 @@ import cv2
 
 from tqdm import tqdm
 
-from fixation import Fixation
+from gpparser.fixation import Fixation
 
 
 def parse_records(filename, custom_record=None, encoding='utf-8'):
@@ -145,6 +145,9 @@ class ProjectSession:
         self.fixation_path = self._get_exp_filename(self.FIX_FILE)
         self.annot_path = self._get_exp_filename(self.ANNOT_FILE)
 
+        # splitted path
+        self.split_path = self.export_path / 'splitted'
+
         self.records_range = range(*records_range)
         self.custom_record = custom_record
         self.records = None
@@ -207,7 +210,7 @@ class ProjectSession:
         # TODO write cam video export
         raise NotImplementedError
 
-    def render_screen(self, filename, last_fixation_count=5, verbose=True):
+    def render_screen(self, filename, last_fixation_count=5, verbose=False):
         """
         Render screen gaze video and save as mp4 file.
 
@@ -243,8 +246,7 @@ class ProjectSession:
         with tqdm(total=len(self.records)) as pbar:
             for i, record in df.iterrows():
                 try:
-                    if verbose:
-                        pbar.update(1)
+                    pbar.update(1)
 
                     if record['NEW_SCN']:
                         scrn_frame = scrn_cap.read()[1]
@@ -278,8 +280,7 @@ class ProjectSession:
 
                 except StopIteration:
                     scrn_frame = scrn_frame_copy
-
-        scrn_writer.release()
+            scrn_writer.release()
 
     def export_all_gaze(self, filename, **kwargs):
         """
@@ -322,27 +323,106 @@ class ProjectSession:
         return pd.read_csv(filename, sep=',', header=None,
                            names=self.ANNOT_FILE['names'])
 
-    def split_records(self):
+    def match_annotation(self):
         """
-        Splits data records into flag chunks from
-        annotation file.
+        Match every data record to flag and chunk number from
+        annotation file. Returns modificated records
+        dataframe (which comes from `get_dataframe()`).
+
+        Returns
+        -------
+            records: pd.DataFrame
         """
-        # TODO continue
-        raise NotImplementedError
         annot = self.read_annotation_file(self.annot_path)
         records = self.get_dataframe()
-        
-        records['CHUNK_NUM'] = 0
-        records['LABEL'] = 0
 
+        records['LABEL'] = np.nan
+        records['CHUNK'] = np.nan
         for i, row in annot.iterrows():
-            timestamp = row['timestamp']
-            flag = row['flag']
+            time = row['timestamp']
+            idx = records['TIME'].round(1).searchsorted(time, side='left')
 
-        print()
+            flag = row['flag']
+            records['LABEL'].iloc[idx] = flag
+            records['CHUNK'].iloc[idx] = i
+        records = records.fillna(method='ffill')
+        records['LABEL'] += 1
+        records[['LABEL', 'CHUNK']] = records[['LABEL', 'CHUNK']].astype(int)
+        records = records.fillna(0)
+        return records
+
+    def split(self, dir_names=None):
+        """
+        Split into chunks records and cam videos rely on
+        flags written in annotation plain text
+        txt file.
+
+        Saves chunks to corresponding
+        `splitted/label_{flag}/` directory.
+
+        Parameters
+        ----------
+        dir_names : dict[int:str]
+            Mapping for label directory names. Keys stand for
+            labels, values stand for names.
+        """
+        try:
+            matched = self.match_annotation()
+
+            # create flags which indicate that frame has been changed
+            matched['NEW_CAM'] = matched['CAM'] \
+                .diff().fillna(True).astype(bool)
+
+            # check dir
+            if not self.split_path.exists():
+                self.split_path.mkdir()
+            
+            # create dir labels
+            labels = np.unique(matched['LABEL'])
+            if dir_names is None:
+                dir_names = {label: f'label_{label}' for label in labels}
+
+            # create cam video capture
+            cam_cap = cv2.VideoCapture(str(self.cam_path))
+            frame_size = get_frame_size(cam_cap)
+
+            # create dirs for labels
+            label_dirs = {}
+            for label in labels:
+                label_dir_path = self.split_path / dir_names[label]
+                if not label_dir_path.exists():
+                    label_dir_path.mkdir()
+                label_dirs[label] = label_dir_path
+            
+            for i, chunk in matched.groupby(by='CHUNK'):
+                # get chunk identifications
+                chunk_name = f'{i:0>8}'
+                label = chunk['LABEL'].iloc[0]
+
+                chunk_path = label_dirs[label] / chunk_name
+                cam_path = str(chunk_path.with_suffix('.mp4'))
+                chunk_cam_writer = cv2.VideoWriter(cam_path,
+                                                   self.FOURCC, fps=30,
+                                                   frameSize=frame_size)
+                print(f'Processing chunk no. {i}')
+                with tqdm(total=len(chunk)) as pbar:
+                    for i, row in chunk.iterrows():
+                        pbar.update(1)
+
+                        if row['NEW_CAM']:
+                            cam_frame = cam_cap.read()[1]
+                            chunk_cam_writer.write(np.copy(cam_frame))
+                        elif i == 0:
+                            chunk_cam_writer.write(np.copy(cam_frame))
+
+                chunk_cam_writer.release()
+                cv2.destroyAllWindows()
+                chunk.to_csv(chunk_path.with_suffix('.csv'))
+        except FileNotFoundError:
+            print(f'Annotation file {self.annot_path} not found.')
 
     def export(self, screen=True, gaze=True, fixation=False,
-               last_fixation_count=5):
+               last_fixation_count=5, verbose=False):
         """
         Export data to `path` dir.
         Results will be saved in (project_directory)/result/.
@@ -368,9 +448,9 @@ class ProjectSession:
         print(f'Start export {self.index} {self.name} session.')
         if screen:
             print(f'Start rendering video:')
-            self.render_screen(
+            self.render_screen(self.screen_path,
                                last_fixation_count,
-                               verbose=True)
+                               verbose=verbose)
         if gaze:
             print(f'Export all gaze.')
             self.export_all_gaze(self.gaze_path)
@@ -386,12 +466,11 @@ def test():
     test_sess_path = Path(sys.argv[1])
     records = int(sys.argv[2])
 
-    sess = ProjectSession(index=7,
+    sess = ProjectSession(index=6,
                           name='Саша',
                           prj_path=Path(test_sess_path),
                           records_range=(records,))
-    # sess.render_screen(test_export_path)
-    sess.export_fixations('fix.csv')
+    sess.split()
 
 
 if __name__ == '__main__':

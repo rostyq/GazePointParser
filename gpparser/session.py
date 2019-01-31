@@ -409,16 +409,19 @@ class ProjectSession:
                         frameSize=self.cam_cap.frame_shape
                         )
 
+                cam_frame = None
+
                 print(f'Processing chunk no. {i}')
                 with tqdm(total=len(chunk)) as pbar:
-                    for i, row in chunk.iterrows():
+                    for j, row in chunk.iterrows():
                         pbar.update(1)
 
                         if row['NEW_CAM']:
                             cam_frame = next(iter_cam_frames)
-                            chunk_cam_writer.write(np.copy(cam_frame))
-                        elif i == 0:
-                            chunk_cam_writer.write(np.copy(cam_frame))
+                            chunk_cam_writer.write(cam_frame)
+                        # elif j == 0:
+                        #     if cam_frame is not None:
+                        #         chunk_cam_writer.write(cam_frame)
 
                 chunk_cam_writer.release()
                 cv2.destroyAllWindows()

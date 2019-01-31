@@ -12,6 +12,7 @@ import cv2
 from tqdm import tqdm
 
 from gpparser.fixation import Fixation
+from gpparser.capture import GazePointCapture
 
 
 def parse_records(filename, custom_record=None, encoding='utf-8'):
@@ -45,11 +46,6 @@ def parse_records(filename, custom_record=None, encoding='utf-8'):
 def get_gaze(record, frame_size):
     width, height = frame_size
     return int(record['FPOGX'] * width), int((record['FPOGY']) * height)
-
-
-def get_frame_size(cap):
-    return tuple((int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                  int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
 
 
 class ProjectSession:
@@ -148,9 +144,14 @@ class ProjectSession:
         # splitted path
         self.split_path = self.export_path / 'splitted'
 
+        # records
         self.records_range = range(*records_range)
         self.custom_record = custom_record
         self.records = None
+
+        # captures
+        self.scrn_cap = GazePointCapture(str(self.scrn_path))
+        self.cam_cap = GazePointCapture(str(self.cam_path))
 
     @classmethod
     def from_prj_entry(cls, info, path):
@@ -221,12 +222,10 @@ class ProjectSession:
         last_fixation_count : int
             Defines how many fixations render on each screen frame.
         """
-        scrn_cap = cv2.VideoCapture(str(self.scrn_path))
         df = self.get_dataframe()
 
-        frame_size = get_frame_size(scrn_cap)
         scrn_writer = cv2.VideoWriter(str(filename), self.FOURCC, fps=60,
-                                      frameSize=frame_size)
+                                      frameSize=self.scrn_cap.frame_shape)
 
         # create flags which indicate that frame has been changed
         df[['NEW_SCN', 'NEW_FID']] = df[['SCN', 'FPOGID']] \
@@ -234,7 +233,7 @@ class ProjectSession:
 
         # convert relative gaze coordinate to screen pixel coordinates
         df[['PIX_FPOGX', 'PIX_FPOGY']] = (
-            df[['FPOGX', 'FPOGY']] * np.array(frame_size)
+            df[['FPOGX', 'FPOGY']] * np.array(self.scrn_cap.frame_shape)
         ).astype(int)
 
         # init fixation
@@ -243,13 +242,16 @@ class ProjectSession:
         # create fixation deque for visualizing last `last_fixation_count`
         fixations_deque = deque([current_fixation], maxlen=last_fixation_count)
 
+        # create frames iterator
+        iter_scrn_frames = iter(self.scrn_cap)
+
         with tqdm(total=len(self.records)) as pbar:
             for i, record in df.iterrows():
                 try:
                     pbar.update(1)
 
                     if record['NEW_SCN']:
-                        scrn_frame = scrn_cap.read()[1]
+                        scrn_frame = next(iter_scrn_frames)
 
                     if scrn_frame is not None:
                         scrn_frame_copy = np.copy(scrn_frame)
@@ -376,15 +378,11 @@ class ProjectSession:
             # check dir
             if not self.split_path.exists():
                 self.split_path.mkdir()
-            
+
             # create dir labels
             labels = np.unique(matched['LABEL'])
             if dir_names is None:
                 dir_names = {label: f'label_{label}' for label in labels}
-
-            # create cam video capture
-            cam_cap = cv2.VideoCapture(str(self.cam_path))
-            frame_size = get_frame_size(cam_cap)
 
             # create dirs for labels
             label_dirs = {}
@@ -393,7 +391,10 @@ class ProjectSession:
                 if not label_dir_path.exists():
                     label_dir_path.mkdir()
                 label_dirs[label] = label_dir_path
-            
+
+            # create frames iterator
+            iter_cam_frames = iter(self.cam_cap)
+
             for i, chunk in matched.groupby(by='CHUNK'):
                 # get chunk identifications
                 chunk_name = f'{i:0>8}'
@@ -401,16 +402,20 @@ class ProjectSession:
 
                 chunk_path = label_dirs[label] / chunk_name
                 cam_path = str(chunk_path.with_suffix('.mp4'))
-                chunk_cam_writer = cv2.VideoWriter(cam_path,
-                                                   self.FOURCC, fps=30,
-                                                   frameSize=frame_size)
+                chunk_cam_writer = cv2.VideoWriter(
+                        cam_path,
+                        self.FOURCC,
+                        fps=30,
+                        frameSize=self.cam_cap.frame_shape
+                        )
+
                 print(f'Processing chunk no. {i}')
                 with tqdm(total=len(chunk)) as pbar:
                     for i, row in chunk.iterrows():
                         pbar.update(1)
 
                         if row['NEW_CAM']:
-                            cam_frame = cam_cap.read()[1]
+                            cam_frame = next(iter_cam_frames)
                             chunk_cam_writer.write(np.copy(cam_frame))
                         elif i == 0:
                             chunk_cam_writer.write(np.copy(cam_frame))

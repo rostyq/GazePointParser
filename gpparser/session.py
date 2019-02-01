@@ -374,7 +374,7 @@ class ProjectSession:
             chunk_indices[mask] = chunk_id
             prev_fixation = next_fixation
 
-        mask = records['FPOGID'] > next_fixation
+        mask = records['FPOGID'] >= next_fixation
         chunk_indices[mask] = chunk_id + 1
 
         records['CHUNK'] = chunk_indices.astype(int)
@@ -497,6 +497,7 @@ class ProjectSession:
         Opens video `screen.mp4 from session directory and writes
         users input to `screen.txt`.
         """
+        load_prev = False
         if self.screen_path.is_file():
 
             if self.annot_path.exists():
@@ -507,7 +508,7 @@ class ProjectSession:
                 if answer.lower() in ['n', 'no']:
                     return
                 elif answer.lower() in ['y', 'yes']:
-                    load_prev = False
+                    pass
                 elif answer == 'a':
                     load_prev = True
                 elif answer == 'exit':
@@ -529,6 +530,7 @@ class ProjectSession:
                             fixations.append(fixation)
                         except ValueError:
                             pass
+
             print('Input fixation indices:')
             print('`end` -- to end this session, `exit` -- end procedure')
             while 'Annotation Loop':

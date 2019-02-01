@@ -368,8 +368,8 @@ class ProjectSession:
         for chunk_id, row in annot.iterrows():
 
             next_fixation = row['fixation']
-            mask = (records['FPOGID'] > prev_fixation) & \
-                   (records['FPOGID'] <= next_fixation)
+            mask = (records['FPOGID'] >= prev_fixation) & \
+                   (records['FPOGID'] < next_fixation)
 
             chunk_indices[mask] = chunk_id
             prev_fixation = next_fixation
@@ -501,11 +501,15 @@ class ProjectSession:
 
             if self.annot_path.exists():
                 print(f'Session {self} has annotation file. Overwrite?')
-                answer = input('(y, yes -- overwrite, n, no -- pass)\n> ')
+                answer = input(
+                        '(y, yes - overwrite; a - append; n, no - pass)\n> '
+                        )
                 if answer.lower() in ['n', 'no']:
                     return
                 elif answer.lower() in ['y', 'yes']:
-                    pass
+                    load_prev = False
+                elif answer == 'a':
+                    load_prev = True
                 elif answer == 'exit':
                     exit()
 
@@ -517,10 +521,17 @@ class ProjectSession:
             process = Popen(command, shell=True, stdout=PIPE, stderr=STDOUT)
 
             fixations = []
+            if load_prev:
+                with self.annot_path.open('r') as annot_file:
+                    for line in annot_file.readlines():
+                        try:
+                            fixation = int(line.strip())
+                            fixations.append(fixation)
+                        except ValueError:
+                            pass
             print('Input fixation indices:')
             print('`end` -- to end this session, `exit` -- end procedure')
             while 'Annotation Loop':
-
                 answer = input('> ')
                 if answer in ['exit', 'end']:
                     process.kill()

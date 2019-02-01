@@ -2,8 +2,13 @@ import gzip
 import ast
 import re
 
+from subprocess import Popen
+from subprocess import PIPE
+from subprocess import STDOUT
+
 from pathlib import Path
 from collections import deque
+from collections import namedtuple
 
 import pandas as pd
 import numpy as np
@@ -79,7 +84,7 @@ class ProjectSession:
     ANNOT_FILE = {
         'name': 'screen',
         'ext': '.txt',
-        'names': ['timestamp', 'flag'],
+        'names': ['fixation'],
     }
 
     GAZE_FILE = {
@@ -101,16 +106,21 @@ class ProjectSession:
     DIR_FMT = '{name}_{index}'
     RAW_FMT = '{index:0>4}-{name}{ext}'
     EXP_FMT = '{name}{ext}'
+    MPV_CMD_FMT = 'mpv {path} --pause=yes --title="{session} screen.mp4 - mpv"'
+
+    SESS_RECORD_COLS = ['index', 'name', 'records',
+                        'rendered', 'annotated', 'splitted']
+    SessionInfo = namedtuple('SessionInfo', SESS_RECORD_COLS)
 
     def __init__(self, index, name, prj_path,
-                 records_range, info=None, custom_record=None):
+                 records_range, raw_info=None, custom_record=None):
         assert isinstance(index, int)
         assert isinstance(name, str)
         assert prj_path.is_dir()
 
-        if info is not None:
-            assert isinstance(info, dict)
-            self.color = tuple(map(int, info.get('Color')[:-1]))
+        if raw_info is not None:
+            assert isinstance(raw_info, dict)
+            self.color = tuple(map(int, raw_info.get('Color')[:-1]))
         else:
             self.color = (255, 0, 0)
 
@@ -122,7 +132,7 @@ class ProjectSession:
 
         self.index = index
         self.name = name
-        self.info = info
+        self.raw_info = raw_info if raw_info is not None else {}
 
         # define path`s
         self.user_path = prj_path / self.USER_DIR
@@ -153,24 +163,27 @@ class ProjectSession:
         self.scrn_cap = GazePointCapture(str(self.scrn_path))
         self.cam_cap = GazePointCapture(str(self.cam_path))
 
+    def __str__(self):
+        return f'{self.index}:{self.name}'
+
     @classmethod
-    def from_prj_entry(cls, info, path):
+    def from_prj_entry(cls, raw_info, path):
         """
         Creates ProjectSession instance from data
         written in %project_name%.prj.
 
         Parameters
         ----------
-        info : dict
+        raw_info : dict
             Dictionary containing data about session.
         prj_path : str or pathlib.Path
             Path to project dir dir in project directory.
         """
-        assert isinstance(info, dict)
-        index = info.get('Id')
-        name = info.get('Name')
-        records_range = (info.get('DataRecords'),)
-        return cls(index=index, name=name, info=info,
+        assert isinstance(raw_info, dict)
+        index = raw_info.get('Id')
+        name = raw_info.get('Name')
+        records_range = (raw_info.get('DataRecords'),)
+        return cls(index=index, name=name, raw_info=raw_info,
                    prj_path=path, records_range=records_range)
 
     def _get_export_dir_path(self):
@@ -183,6 +196,16 @@ class ProjectSession:
 
     def _get_exp_filename(self, file_conf):
         return self.export_path / self.EXP_FMT.format(**file_conf)
+
+    def get_session_info(self):
+        return self.SessionInfo(
+            index=self.index,
+            name=self.name,
+            records=self.raw_info.get('DataRecords', len(self.records_range)),
+            rendered=self.screen_path.is_file(),
+            annotated=self.annot_path.is_file(),
+            splitted=self.split_path.is_dir(),
+            )
 
     def iter_records(self):
         """
@@ -322,10 +345,10 @@ class ProjectSession:
         filename : str or pathlib.Path
             File name of annotation plain-text file.
         """
-        return pd.read_csv(filename, sep=',', header=None,
+        return pd.read_csv(filename, sep=',', header=None, comment='#',
                            names=self.ANNOT_FILE['names'])
 
-    def match_annotation(self):
+    def match_annotation(self, shift=1):
         """
         Match every data record to flag and chunk number from
         annotation file. Returns modificated records
@@ -338,19 +361,23 @@ class ProjectSession:
         annot = self.read_annotation_file(self.annot_path)
         records = self.get_dataframe()
 
-        records['LABEL'] = np.nan
-        records['CHUNK'] = np.nan
-        for i, row in annot.iterrows():
-            time = row['timestamp']
-            idx = records['TIME'].round(1).searchsorted(time, side='left')
+        chunk_indices = np.full(len(records), np.nan)
 
-            flag = row['flag']
-            records['LABEL'].iloc[idx] = flag
-            records['CHUNK'].iloc[idx] = i
-        records = records.fillna(method='ffill')
-        records['LABEL'] += 1
-        records[['LABEL', 'CHUNK']] = records[['LABEL', 'CHUNK']].astype(int)
-        records = records.fillna(0)
+        prev_fixation = 0
+        for chunk_id, row in annot.iterrows():
+
+            next_fixation = row['fixation']
+            mask = (records['FPOGID'] > prev_fixation) & \
+                   (records['FPOGID'] <= next_fixation)
+
+            chunk_indices[mask] = chunk_id
+            prev_fixation = next_fixation
+
+        mask = records['FPOGID'] > next_fixation
+        chunk_indices[mask] = chunk_id + 1
+
+        records['CHUNK'] = chunk_indices.astype(int)
+        records['LABEL'] = (chunk_indices % 2 + shift).astype(int)
         return records
 
     def split(self, dir_names=None):
@@ -369,6 +396,7 @@ class ProjectSession:
             labels, values stand for names.
         """
         try:
+            print(f'Processing split for session {self}')
             matched = self.match_annotation()
 
             # create flags which indicate that frame has been changed
@@ -419,15 +447,12 @@ class ProjectSession:
                         if row['NEW_CAM']:
                             cam_frame = next(iter_cam_frames)
                             chunk_cam_writer.write(cam_frame)
-                        # elif j == 0:
-                        #     if cam_frame is not None:
-                        #         chunk_cam_writer.write(cam_frame)
 
                 chunk_cam_writer.release()
                 cv2.destroyAllWindows()
                 chunk.to_csv(chunk_path.with_suffix('.csv'))
         except FileNotFoundError:
-            print(f'Annotation file {self.annot_path} not found.')
+            print(f'Annotation for {self} in {self.annot_path} not found.')
 
     def export(self, screen=True, gaze=True, fixation=False,
                last_fixation_count=5, verbose=False):
@@ -466,6 +491,72 @@ class ProjectSession:
             print(f'Export fixations.')
             self.export_fixations(self.fixation_path)
 
+    def annotate(self):
+        """
+        Opens video `screen.mp4 from session directory and writes
+        users input to `screen.txt`.
+        """
+        if self.screen_path.is_file():
+
+            if self.annot_path.exists():
+                print(f'Session {self} has annotation file. Overwrite?')
+                answer = input('(y, yes -- overwrite, n, no -- pass)\n> ')
+                if answer.lower() in ['n', 'no']:
+                    return
+                elif answer.lower() in ['y', 'yes']:
+                    pass
+                elif answer == 'exit':
+                    exit()
+
+            # open screen video in mpv
+            command = self.MPV_CMD_FMT.format(
+                    path=str(self.screen_path),
+                    session=str(self)
+                    )
+            process = Popen(command, shell=True, stdout=PIPE, stderr=STDOUT)
+
+            fixations = []
+            print('Input fixation indices:')
+            print('`end` -- to end this session, `exit` -- end procedure')
+            while 'Annotation Loop':
+                answer = input('> ')
+                if answer in ['exit', 'end']:
+                    process.kill()
+                    break
+                elif answer == 'rm':
+                    try:
+                        removed = fixations.pop()
+                        print(f'Removed {removed}')
+                    except IndexError:
+                        print('Fixation list is empty.')
+                elif answer == 'ls':
+                    print(fixations)
+                else:
+                    try:
+                        fixation = int(answer)
+                        if fixations:
+                            assert fixation > fixations[-1]
+                        fixations.append(fixation)
+                    except ValueError:
+                        print('Wrong input')
+                        continue
+                    except AssertionError:
+                        print('New fixation must be bigger than previous.')
+                        continue
+
+            with self.annot_path.open('w') as annot_file:
+                annot_file.write('# Annotated fixation indices\n')
+                payload = '\n'.join(map(str, fixations))
+                annot_file.write(payload)
+
+            if answer == 'exit':
+                process.kill()
+                exit()
+
+            process.wait()
+        else:
+            print(f'Session {self} has no screen video.')
+
 
 def test():
     import sys
@@ -478,7 +569,7 @@ def test():
                           name='Саша',
                           prj_path=Path(test_sess_path),
                           records_range=(records,))
-    sess.split()
+    print(sess.get_session_info())
 
 
 if __name__ == '__main__':

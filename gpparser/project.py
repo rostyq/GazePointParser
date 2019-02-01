@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import yaml
+import pandas as pd
 from gpparser.session import ProjectSession
 
 
@@ -25,14 +26,13 @@ class GazePointProject:
         path : str or pathlib.Path
             Path to project directory.
         """
-        # paths
-        self.path = Path(path)
+        self.path = Path(path)  # root project path
         self.name = None
-        self.user_path = None
-        self.src_path = None
-        self.result_path = None
-        self.prj_path = None
-        self.sessions = []
+        self.user_path = None  # path to user dir
+        self.src_path = None  # path to src dir
+        self.result_path = None  # path to result dir
+        self.prj_path = None  # path to .prj file
+        self.sessions = []  # placeholder for session objects
 
         # check project files
         self._read_prj_files()
@@ -72,6 +72,20 @@ class GazePointProject:
             self.sessions = [ProjectSession.from_prj_entry(entry, self.path)
                              for entry in prj_data]
 
+    def get_sessions_info(self):
+        """
+        Return pandas.DataFrame with information
+        about available sessions.
+
+        Return
+        ------
+            sessions_dataframe : pd.DataFrame
+        """
+        df = pd.DataFrame(
+                [sess.get_session_info() for sess in self.sessions]
+                ).set_index('index')
+        return df
+
     def export_sessions(self, session_indices=None, **kwargs):
         """
         Export data to `result` dir for specified sessions in project.
@@ -93,20 +107,25 @@ class GazePointProject:
             last_fixation_count : int
                 how many fixations to render on each frame.
         """
-        sessions = self.sessions \
-            if session_indices is None \
-            else [self.sessions[i] for i in session_indices]
+        sessions = iter(self) if session_indices is None \
+            else self[session_indices]
 
         for session in sessions:
             session.export(**kwargs)
 
     def split_sessions(self, session_indices=None, **kwargs):
-        sessions = self.sessions \
-            if session_indices is None \
-            else [self.sessions[i] for i in session_indices]
+        sessions = iter(self) if session_indices is None \
+                              else self[session_indices]
 
         for session in sessions:
             session.split()
+
+    def annotate_sessions(self, session_indices=None, **kwargs):
+        sessions = iter(self) if session_indices is None \
+            else self[session_indices]
+
+        for sess in sessions:
+            sess.annotate()
 
     def __iter__(self):
         return iter(self.sessions)
@@ -115,7 +134,12 @@ class GazePointProject:
         return len(self.sessions)
 
     def __getitem__(self, key):
-        return self.sessions[key]
+        if isinstance(key, int):
+            return self.sessions[key]
+        elif isinstance(key, list):
+            return [self.sessions[i] for i in key]
+        else:
+            raise IndexError(f'Wrong type of {key}: {type(key)}.')
 
     def __setitem__(self, key, value):
         assert isinstance(value, ProjectSession), type(value)

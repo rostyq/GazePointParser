@@ -29,6 +29,12 @@ def get_argument_parser():
         relying on specified in annotation data with timestamps.
     """
 
+    annotate_help = """
+        Run annotation video. Opens in mpv screen video from session
+        and in console waits for fixation-stamps. Recieved fixation
+        indices will be written in /result/session_name/screen.txt.
+    """
+
     w_help = """
         How much fixations need to be rendered on each screen frame. Default 5.
     """
@@ -72,18 +78,19 @@ def get_argument_parser():
 
     parser.add_argument('--export', action='store_true', help=export_help)
     parser.add_argument('--split', action='store_true', help=split_help)
+    parser.add_argument('--annotate', action='store_true', help=annotate_help)
 
     parser.add_argument('--sessions',
                         metavar='N', type=int, default=None, nargs='+',
                         help='Session indices which should be processed.')
-    parser.add_argument('-a', action='store_true', help=a_help)
+    parser.add_argument('--all', action='store_true', help=a_help)
 
-    parser.add_argument('-r', action='store_true', help=r_help)
-    parser.add_argument('-w', type=int, default=5, help=w_help)
+    parser.add_argument('-r', '--render', action='store_true', help=r_help)
+    parser.add_argument('-w', '--window', type=int, default=5, help=w_help)
 
-    parser.add_argument('-f', action='store_true', help=f_help)
-    parser.add_argument('-g', action='store_true', help=g_help)
-    parser.add_argument('-i', action='store_true', help=i_help)
+    parser.add_argument('-f', '--fixations', action='store_true', help=f_help)
+    parser.add_argument('-g', '--gazes', action='store_true', help=g_help)
+    parser.add_argument('-i', '--imshow', action='store_true', help=i_help)
 
     return parser
 
@@ -100,31 +107,25 @@ def main(args=None):
 
     project = GazePointProject(Path(args.project_dir))
 
-    print('Available sessions:')
-    print('{:>5} {:<20} {:>10} {:9}'.format(
-            'index',
-            'name',
-            'records',
-            'annotated'
-        )
-    )
-    for sess in project.sessions:
-        index = sess.index
-        name = sess.name
-        annotated = '+' if sess.annot_path.is_file() else '-'
-        records = sess.info.get('DataRecords')
+    session_indices = None if args.all else args.sessions
 
-        print(f'{index:>5} {name:<20} {records:>10} {annotated:>9}')
+    print(f"Information about available sessions in {project.path}:")
+    print(project.get_sessions_info().replace(
+          {True: '+', False: '-'}
+          ).to_string())
 
-    session_indices = args.sessions if not args.a else args.sessions
     if args.export:
         project.export_sessions(session_indices,
-                                screen=args.r,
-                                fixation=args.f,
-                                gaze=args.g,
-                                verbose=args.i,
-                                last_fixation_count=args.w)
-    elif args.split:
+                                screen=args.render,
+                                fixation=args.fixations,
+                                gaze=args.gazes,
+                                verbose=args.imshow,
+                                last_fixation_count=args.window)
+
+    if args.annotate:
+        project.annotate_sessions(session_indices)
+
+    if args.split:
         project.split_sessions(session_indices)
 
 

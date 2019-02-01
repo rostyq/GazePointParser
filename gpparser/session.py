@@ -106,7 +106,8 @@ class ProjectSession:
     DIR_FMT = '{name}_{index}'
     RAW_FMT = '{index:0>4}-{name}{ext}'
     EXP_FMT = '{name}{ext}'
-    MPV_CMD_FMT = 'mpv {path} --pause=yes --title="{session} screen.mp4 - mpv"'
+    PLAYER_CMD_FMT = 'open {path}'
+    # --pause=yes --title="{session} screen.mp4 - mpv"'
 
     SESS_RECORD_COLS = ['index', 'name', 'records',
                         'rendered', 'annotated', 'splitted']
@@ -509,9 +510,9 @@ class ProjectSession:
                     exit()
 
             # open screen video in mpv
-            command = self.MPV_CMD_FMT.format(
+            command = self.PLAYER_CMD_FMT.format(
                     path=str(self.screen_path),
-                    session=str(self)
+                    # session=str(self)
                     )
             process = Popen(command, shell=True, stdout=PIPE, stderr=STDOUT)
 
@@ -519,6 +520,7 @@ class ProjectSession:
             print('Input fixation indices:')
             print('`end` -- to end this session, `exit` -- end procedure')
             while 'Annotation Loop':
+
                 answer = input('> ')
                 if answer in ['exit', 'end']:
                     process.kill()
